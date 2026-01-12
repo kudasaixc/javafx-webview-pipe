@@ -2,24 +2,21 @@
 Pipe WebView Displayer in JavaFX + Maven.
 
 ## What this does
-This project hardcodes a "pipe string" inside a JavaFX app. When the user types the exact
-pipe string, the app connects to a local Flask server and displays it in a JavaFX `WebView`.
+This project uses a lightweight local registry so a JavaFX app can resolve a **pipe string**
+like `navalbattle` into a local URL. When the user types a pipe string, the app looks it up
+in the registry and loads the matching URL in a JavaFX `WebView`.
 
-The default pipe string is:
-
-```
-pipe://localhost:5000
-```
-
-When the string matches, the app loads:
+The registry can map multiple pipe strings to different local servers, e.g.:
 
 ```
-http://localhost:5000
+navalbattle -> http://localhost:8912
+hello -> http://localhost:2734
 ```
 
 ## Running the app
-1. Start your local Flask server on `http://localhost:5000`.
-2. Run the JavaFX application:
+1. Register your local servers (see registry format below).
+2. Start your local web servers.
+3. Run the JavaFX application:
 
 ```
 ./mvnw javafx:run
@@ -31,84 +28,121 @@ If you do not have the Maven wrapper, run:
 mvn javafx:run
 ```
 
-Then enter `pipe://localhost:5000` in the input field and click **Connect**.
+Then enter a pipe string (for example `navalbattle`) in the input field and click **Connect**.
 
-## Where the pipe string lives
-The pipe string is hardcoded in:
+## Where the pipe strings live
+Pipe strings are stored in a local registry file at:
 
 ```
-src/main/java/com/example/pipeviewer/PipeViewerApp.java
+~/.pipeviewer/registry.json
 ```
 
-Change `PIPE_STRING` and `LOCAL_HTTP_FALLBACK` to match your local server.
+The JavaFX app reads this file each time you click **Connect**.
 
-## Pipe string implementations
-The pipe string is just a custom URL scheme that maps to a local HTTP URL. Below are
-examples for other languages that parse a `pipe://host:port` value and translate it to
-`http://host:port`.
+### Registry format
+The registry is a small JSON document with a `pipes` object:
+
+```json
+{
+  "pipes": {
+    "navalbattle": "http://localhost:8912",
+    "hello": "http://localhost:2734"
+  }
+}
+```
+
+## Developer SDK (registering pipe strings)
+Each web server can register its pipe string by writing or updating the registry file.
+Below are small helper examples you can integrate into your project to register a pipe.
 
 ### Python
 ```python
-from urllib.parse import urlparse
+import json
+from pathlib import Path
 
-def pipe_to_http(pipe_string: str) -> str:
-    parsed = urlparse(pipe_string)
-    if parsed.scheme != "pipe" or not parsed.hostname or not parsed.port:
-        raise ValueError("Invalid pipe string")
-    return f"http://{parsed.hostname}:{parsed.port}"
+def register_pipe(pipe_name: str, url: str) -> None:
+    registry_path = Path.home() / ".pipeviewer" / "registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"pipes": {}}
+    if registry_path.exists():
+        with registry_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    data.setdefault("pipes", {})[pipe_name] = url
+    with registry_path.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
 
-# Example
-print(pipe_to_http("pipe://localhost:5000"))
+register_pipe("navalbattle", "http://localhost:8912")
 ```
 
-### JavaScript
+### JavaScript (Node.js)
 ```javascript
-function pipeToHttp(pipeString) {
-  const url = new URL(pipeString);
-  if (url.protocol !== "pipe:") {
-    throw new Error("Invalid pipe string");
+import fs from "fs";
+import os from "os";
+import path from "path";
+
+function registerPipe(pipeName, url) {
+  const registryPath = path.join(os.homedir(), ".pipeviewer", "registry.json");
+  fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+  let data = { pipes: {} };
+  if (fs.existsSync(registryPath)) {
+    data = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
   }
-  return `http://${url.hostname}:${url.port}`;
+  data.pipes ??= {};
+  data.pipes[pipeName] = url;
+  fs.writeFileSync(registryPath, JSON.stringify(data, null, 2));
 }
 
-console.log(pipeToHttp("pipe://localhost:5000"));
+registerPipe("navalbattle", "http://localhost:8912");
 ```
 
 ### C#
 ```csharp
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
 
-string PipeToHttp(string pipeString)
+void RegisterPipe(string pipeName, string url)
 {
-    var uri = new Uri(pipeString);
-    if (!uri.Scheme.Equals("pipe", StringComparison.OrdinalIgnoreCase) || uri.Host.Length == 0 || uri.Port == -1)
+    var registryPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".pipeviewer",
+        "registry.json"
+    );
+    Directory.CreateDirectory(Path.GetDirectoryName(registryPath)!);
+    var data = new Dictionary<string, Dictionary<string, string>> { { "pipes", new() } };
+    if (File.Exists(registryPath))
     {
-        throw new ArgumentException("Invalid pipe string");
+        var json = File.ReadAllText(registryPath);
+        data = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, string>>>(json)
+               ?? data;
     }
-
-    return $"http://{uri.Host}:{uri.Port}";
+    data["pipes"][pipeName] = url;
+    var output = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+    File.WriteAllText(registryPath, output);
 }
 
-Console.WriteLine(PipeToHttp("pipe://localhost:5000"));
+RegisterPipe("navalbattle", "http://localhost:8912");
 ```
 
 ### C++
 ```cpp
-#include <iostream>
-#include <regex>
-#include <string>
+#include <fstream>
+#include <filesystem>
+#include <nlohmann/json.hpp>
 
-std::string pipeToHttp(const std::string& pipeString) {
-    std::regex pattern(R"(^pipe://([^:/]+):(\d+)$)");
-    std::smatch matches;
-    if (!std::regex_match(pipeString, matches, pattern)) {
-        throw std::invalid_argument("Invalid pipe string");
+void registerPipe(const std::string& pipeName, const std::string& url) {
+    auto registryPath = std::filesystem::path(std::getenv("HOME")) / ".pipeviewer" / "registry.json";
+    std::filesystem::create_directories(registryPath.parent_path());
+    nlohmann::json data = { {"pipes", nlohmann::json::object()} };
+    if (std::filesystem::exists(registryPath)) {
+        std::ifstream input(registryPath);
+        input >> data;
     }
-    return "http://" + matches[1].str() + ":" + matches[2].str();
+    data["pipes"][pipeName] = url;
+    std::ofstream output(registryPath);
+    output << data.dump(2);
 }
 
-int main() {
-    std::cout << pipeToHttp("pipe://localhost:5000") << std::endl;
-    return 0;
-}
+registerPipe("navalbattle", "http://localhost:8912");
 ```
