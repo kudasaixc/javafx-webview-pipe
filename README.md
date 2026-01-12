@@ -55,6 +55,48 @@ The registry is a small JSON document with a `pipes` object:
 Each web server can register its pipe string by writing or updating the registry file.
 Below are small helper examples you can integrate into your project to register a pipe.
 
+## Python guide: register a pipe from any project
+This guide shows how a standalone Python script can register a pipe string and URL.
+
+### 1) Create `register_pipe.py`
+Create a file named `register_pipe.py` in **any** folder (it does not have to be inside
+the JavaFX project):
+
+```python
+import json
+from pathlib import Path
+
+def register_pipe(pipe_name: str, url: str) -> None:
+    registry_path = Path.home() / ".pipeviewer" / "registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"pipes": {}}
+    if registry_path.exists():
+        with registry_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    data.setdefault("pipes", {})[pipe_name] = url
+    with registry_path.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+
+if __name__ == "__main__":
+    register_pipe("navalbattle", "http://localhost:8912")
+```
+
+### 2) Run the script
+From the folder where you saved the file:
+
+```
+python register_pipe.py
+```
+
+### 3) Verify the registry file
+After running, you should see the mapping in:
+
+```
+~/.pipeviewer/registry.json
+```
+
+Open the JavaFX app, type `navalbattle`, and click **Connect** to load the URL.
+
 ### Python
 ```python
 import json
