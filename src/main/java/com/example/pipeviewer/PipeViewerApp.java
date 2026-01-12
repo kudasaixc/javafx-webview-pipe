@@ -1,7 +1,16 @@
 package com.example.pipeviewer;
 
-import java.net.URI;
-import java.net.URISyntaxException;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
@@ -14,14 +23,18 @@ import javafx.scene.web.WebView;
 import javafx.stage.Stage;
 
 public class PipeViewerApp extends Application {
-    private static final String PIPE_STRING = "pipe://localhost:5000";
-    private static final String LOCAL_HTTP_FALLBACK = "http://localhost:5000";
+    private static final Path REGISTRY_PATH = Paths.get(
+            System.getProperty("user.home"),
+            ".pipeviewer",
+            "registry.json"
+    );
+    private static final Pattern PIPE_ENTRY_PATTERN = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"([^\"]+)\"");
 
     @Override
     public void start(Stage stage) {
         Label prompt = new Label("Enter pipe string:");
         TextField input = new TextField();
-        input.setPromptText(PIPE_STRING);
+        input.setPromptText("pipe name");
 
         Button connect = new Button("Connect");
         Label status = new Label("Waiting for pipe string.");
@@ -35,14 +48,14 @@ public class PipeViewerApp extends Application {
                 return;
             }
 
-            if (!PIPE_STRING.equals(value)) {
-                status.setText("Invalid pipe string.");
+            Optional<String> targetUrl = resolvePipe(value);
+            if (targetUrl.isEmpty()) {
+                status.setText("Unknown pipe string. Update " + REGISTRY_PATH);
                 return;
             }
 
-            String targetUrl = toLocalHttp(value);
-            status.setText("Loading " + targetUrl);
-            webView.getEngine().load(targetUrl);
+            status.setText("Loading " + targetUrl.get());
+            webView.getEngine().load(targetUrl.get());
         });
 
         HBox controls = new HBox(10, prompt, input, connect);
@@ -60,21 +73,66 @@ public class PipeViewerApp extends Application {
         stage.show();
     }
 
-    private String toLocalHttp(String pipeString) {
-        try {
-            URI uri = new URI(pipeString);
-            if (!"pipe".equalsIgnoreCase(uri.getScheme())) {
-                return LOCAL_HTTP_FALLBACK;
-            }
-            String host = uri.getHost();
-            int port = uri.getPort();
-            if (host == null || port == -1) {
-                return LOCAL_HTTP_FALLBACK;
-            }
-            return "http://" + host + ":" + port;
-        } catch (URISyntaxException ex) {
-            return LOCAL_HTTP_FALLBACK;
+    private Optional<String> resolvePipe(String pipeName) {
+        Map<String, String> registry = loadRegistry();
+        if (registry.isEmpty()) {
+            return Optional.empty();
         }
+        return Optional.ofNullable(registry.get(pipeName));
+    }
+
+    private Map<String, String> loadRegistry() {
+        if (!Files.exists(REGISTRY_PATH)) {
+            return Collections.emptyMap();
+        }
+
+        try {
+            String json = Files.readString(REGISTRY_PATH, StandardCharsets.UTF_8);
+            return parseRegistryJson(json);
+        } catch (IOException ex) {
+            return Collections.emptyMap();
+        }
+    }
+
+    private Map<String, String> parseRegistryJson(String json) {
+        int pipesIndex = json.indexOf("\"pipes\"");
+        if (pipesIndex == -1) {
+            return Collections.emptyMap();
+        }
+
+        int startBrace = json.indexOf('{', pipesIndex);
+        if (startBrace == -1) {
+            return Collections.emptyMap();
+        }
+
+        int endBrace = findMatchingBrace(json, startBrace);
+        if (endBrace == -1) {
+            return Collections.emptyMap();
+        }
+
+        String pipesBlock = json.substring(startBrace + 1, endBrace);
+        Matcher matcher = PIPE_ENTRY_PATTERN.matcher(pipesBlock);
+        Map<String, String> entries = new HashMap<>();
+        while (matcher.find()) {
+            entries.put(matcher.group(1), matcher.group(2));
+        }
+        return entries;
+    }
+
+    private int findMatchingBrace(String json, int startIndex) {
+        int depth = 0;
+        for (int i = startIndex; i < json.length(); i++) {
+            char current = json.charAt(i);
+            if (current == '{') {
+                depth++;
+            } else if (current == '}') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
     }
 
     public static void main(String[] args) {
